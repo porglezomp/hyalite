@@ -51,8 +51,12 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
     let mut results = Vec::new();
     while fuel > 0 && !queue.is_empty() {
         let (bb, mut trace) = queue.pop_front().unwrap();
-        fuel = fuel.saturating_sub(1);
         let block = cfg.get_block(bb).unwrap();
+        match block.terminator {
+            // Don't use fuel on forwarding blocks
+            Terminator::Jump(_) if block.insts.is_empty() => (),
+            _ => fuel = fuel.saturating_sub(1),
+        }
         for inst in &block.insts {
             trace.push(inst.clone());
             if let Inst::Assert(_) = inst {
