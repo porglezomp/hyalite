@@ -1,7 +1,7 @@
 #![feature(slice_patterns)]
 
 use crate::{
-    ast::{BExpr, Inst, NExpr, Stmt, Var},
+    ast::{BExpr, Inst, NExpr, Stmt, Var, MEM_VAR},
     compile::{Cfg, Id, Terminator},
 };
 use std::{
@@ -29,7 +29,14 @@ fn main() {
             ],
             None,
         ),
-        Stmt::while_(BExpr::lt(0, x), vec![Stmt::assign(x, NExpr::sub(x, 413))]),
+        Stmt::while_(
+            BExpr::lt(0, x),
+            vec![
+                Stmt::store(0, x),
+                Stmt::store(x, 13),
+                Stmt::assign(x, NExpr::sub(x, 413)),
+            ],
+        ),
         Stmt::assert(BExpr::le(x, 0)),
     ]);
     println!("{}", prog);
@@ -43,10 +50,9 @@ fn main() {
     config.set_model_generation(true);
     let ctx = z3::Context::new(&config);
     for (i, trace) in results.iter().enumerate() {
-        let (sat, vars, decls) = make_sat(&ctx, &trace);
+        let res = make_sat(&ctx, &trace);
         println!("Trace {}:", i);
-        sat.check();
-        print_assert(&trace, &sat, &vars, &decls);
+        print_assert(&trace, &res);
     }
 }
 
@@ -65,17 +71,30 @@ fn make_var(ctx: &z3::Context, v: Var) -> z3::Ast {
     )
 }
 
-fn make_sat<'ctx>(
-    ctx: &'ctx z3::Context,
-    trace: &[Inst],
-) -> (
-    z3::Solver<'ctx>,
-    BTreeMap<Var, z3::Ast<'ctx>>,
-    BTreeMap<Var, z3::Ast<'ctx>>,
-) {
+struct SmtResult<'ctx> {
+    sat: z3::Solver<'ctx>,
+    vars: BTreeMap<Var, z3::Ast<'ctx>>,
+    decls: BTreeMap<Var, z3::Ast<'ctx>>,
+    mem: z3::Ast<'ctx>,
+}
+
+fn make_mem(ctx: &z3::Context) -> z3::Ast {
+    let arr = ctx.array_sort(&ctx.bitvector_sort(32), &ctx.bitvector_sort(32));
+    z3::Ast::new_const(
+        &z3::Symbol::from_string(
+            ctx,
+            &format!("@MEM@{}", Z3_FRESH.fetch_add(1, Ordering::Relaxed)),
+        ),
+        &arr,
+    )
+}
+
+fn make_sat<'ctx>(ctx: &'ctx z3::Context, trace: &[Inst]) -> SmtResult<'ctx> {
     let solver = z3::Solver::new(&ctx);
     let mut decls = BTreeMap::new();
     let mut vars = BTreeMap::new();
+    let mut mem = make_mem(&ctx);
+    vars.insert(MEM_VAR, mem.clone());
     for inst in trace {
         match inst {
             Inst::Declare(v) => {
@@ -88,6 +107,14 @@ fn make_sat<'ctx>(
                 solver.assert(&new_var._eq(&x.to_ast(ctx, &vars)));
                 vars.insert(*v, new_var);
             }
+            Inst::Store(addr, n) => {
+                let new_mem = make_mem(&ctx);
+                solver.assert(
+                    &new_mem._eq(&mem.store(&addr.to_ast(ctx, &vars), &n.to_ast(ctx, &vars))),
+                );
+                mem = new_mem;
+                vars.insert(MEM_VAR, mem.clone());
+            }
             Inst::Assume(b) => {
                 solver.assert(&b.to_ast(ctx, &vars));
             }
@@ -96,7 +123,12 @@ fn make_sat<'ctx>(
             }
         }
     }
-    (solver, vars, decls)
+    SmtResult {
+        sat: solver,
+        vars,
+        decls,
+        mem,
+    }
 }
 
 impl NExpr {
@@ -111,6 +143,7 @@ impl NExpr {
             NExpr::Mul(l, r) => l.to_ast(ctx, vars).bvmul(&r.to_ast(ctx, vars)),
             NExpr::Div(l, r) => l.to_ast(ctx, vars).bvsdiv(&r.to_ast(ctx, vars)),
             NExpr::Mod(l, r) => l.to_ast(ctx, vars).bvsmod(&r.to_ast(ctx, vars)),
+            NExpr::Load(addr) => vars[&MEM_VAR].select(&addr.to_ast(ctx, vars)),
             NExpr::Var(v) => vars[v].clone(),
             NExpr::OfBool(b) => {
                 let bv32 = ctx.bitvector_sort(32);
@@ -164,12 +197,12 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
         for inst in &block.insts {
             match inst {
                 Inst::Assume(_) => {
-                    assert!(make_sat(&ctx, &trace).0.check());
+                    assert!(make_sat(&ctx, &trace).sat.check());
                     trace.push(inst.clone());
-                    let (sat, vars, decls) = make_sat(&ctx, &trace);
-                    if !sat.check() {
+                    let res = make_sat(&ctx, &trace);
+                    if !res.sat.check() {
                         println!("Assumption contradiction!");
-                        print_assert(&trace, &sat, &vars, &decls);
+                        print_assert(&trace, &res);
                         continue 'queue;
                     }
                 }
@@ -177,10 +210,10 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
                     fuel = fuel.saturating_sub(1);
                     let mut assert_trace = trace.clone();
                     assert_trace.push(inst.clone());
-                    let (sat, vars, decls) = make_sat(&ctx, &assert_trace);
-                    if sat.check() {
+                    let res = make_sat(&ctx, &assert_trace);
+                    if res.sat.check() {
                         println!("Assertion failure:");
-                        print_assert(&assert_trace, &sat, &vars, &decls);
+                        print_assert(&assert_trace, &res);
                         continue 'queue;
                     }
                     // results.push(assert_trace);
@@ -192,7 +225,7 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
 
         match block.terminator {
             Terminator::Halt => {
-                if make_sat(&ctx, &trace).0.check() {
+                if make_sat(&ctx, &trace).sat.check() {
                     results.push(trace)
                 } else {
                     println!("Infeasible path reached halt");
@@ -208,13 +241,13 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
                 trace.push(Inst::Assume(cond.clone()));
                 trace_f.push(Inst::Assume(BExpr::not(cond.clone())));
 
-                if make_sat(&ctx, &trace).0.check() {
+                if make_sat(&ctx, &trace).sat.check() {
                     queue.push_back((t_id, trace));
                 } else {
                     println!("Discarding inconsistent path: {}", trace.last().unwrap());
                 }
 
-                if make_sat(&ctx, &trace_f).0.check() {
+                if make_sat(&ctx, &trace_f).sat.check() {
                     queue.push_back((f_id, trace_f));
                 } else {
                     println!("Discarding inconsistent path: {}", trace_f.last().unwrap());
@@ -225,31 +258,31 @@ fn run_queue(cfg: &Cfg, queue: &mut VecDeque<(Id, Vec<Inst>)>, mut fuel: usize) 
     results
 }
 
-fn print_assert(
-    trace: &[Inst],
-    sat: &z3::Solver,
-    vars: &BTreeMap<Var, z3::Ast>,
-    decls: &BTreeMap<Var, z3::Ast>,
-) {
-    // println!("\n{}", sat);
+fn print_assert(trace: &[Inst], res: &SmtResult) {
+    res.sat.check();
     for inst in trace {
         println!("{}", inst);
     }
-    let model = sat.get_model();
+    let model = res.sat.get_model();
     println!("===");
-    for (var, exp) in decls {
+    for (var, exp) in &res.decls {
         if let Some(val) = model.eval(&exp) {
-            println!("{}: {} ({})", var, exp, val.as_i64().unwrap() as i32);
+            println!("{}: {} ({})", var, exp, val);
         } else {
             println!("{}: {} (???)", var, exp);
         }
     }
     println!("=>");
-    for (var, exp) in vars {
+    for (var, exp) in &res.vars {
+        if *var == MEM_VAR {
+            continue;
+        }
         if let Some(val) = model.eval(&exp) {
-            println!("{}: {} ({})", var, exp, val.as_i64().unwrap() as i32);
+            println!("{}: {} ({})", var, exp, val);
         } else {
             println!("{}: {} (???)", var, exp);
         }
     }
+    println!("===");
+    println!("Memory: {}", model.eval(&res.vars[&MEM_VAR]).unwrap());
 }

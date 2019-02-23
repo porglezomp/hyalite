@@ -7,7 +7,8 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Var(u32);
 
-static NEXT_FRESH_VAR: AtomicU32 = AtomicU32::new(0);
+pub static MEM_VAR: Var = Var(0);
+static NEXT_FRESH_VAR: AtomicU32 = AtomicU32::new(1);
 
 impl Var {
     pub fn fresh() -> Var {
@@ -63,6 +64,7 @@ pub enum NExpr {
     Mul(Rc<NExpr>, Rc<NExpr>),
     Div(Rc<NExpr>, Rc<NExpr>),
     Mod(Rc<NExpr>, Rc<NExpr>),
+    Load(Rc<NExpr>),
     Var(Var),
     OfBool(Rc<BExpr>),
     Lit(i32),
@@ -76,12 +78,17 @@ impl NExpr {
     pub fn sub(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> NExpr {
         NExpr::Sub(Rc::new(n1.into()), Rc::new(n2.into()))
     }
+
+    pub fn load(addr: impl Into<NExpr>) -> NExpr {
+        NExpr::Load(Rc::new(addr.into()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inst {
     Declare(Var),
     Assign(Var, NExpr),
+    Store(NExpr, NExpr),
     Assume(BExpr),
     Assert(BExpr),
 }
@@ -109,6 +116,10 @@ impl Stmt {
 
     pub fn assign(v: Var, x: impl Into<NExpr>) -> Stmt {
         Stmt::Inst(Inst::Assign(v, x.into()))
+    }
+
+    pub fn store(addr: impl Into<NExpr>, n: impl Into<NExpr>) -> Stmt {
+        Stmt::Inst(Inst::Store(addr.into(), n.into()))
     }
 
     pub fn assume(p: impl Into<BExpr>) -> Stmt {
@@ -166,6 +177,7 @@ impl fmt::Display for NExpr {
             NExpr::Mul(l, r) => write!(fmt, "({} * {})", l, r),
             NExpr::Div(l, r) => write!(fmt, "({} / {})", l, r),
             NExpr::Mod(l, r) => write!(fmt, "({} % {})", l, r),
+            NExpr::Load(addr) => write!(fmt, "[{}]", addr),
             NExpr::Var(v) => write!(fmt, "{}", v),
             NExpr::OfBool(b) => write!(fmt, "int({})", b),
             NExpr::Lit(n) => write!(fmt, "{}", n),
@@ -178,6 +190,7 @@ impl fmt::Display for Inst {
         match self {
             Inst::Declare(v) => write!(fmt, "var {}", v),
             Inst::Assign(v, n) => write!(fmt, "{} := {}", v, n),
+            Inst::Store(addr, n) => write!(fmt, "[{}] := {}", addr, n),
             Inst::Assume(p) => write!(fmt, "assume {}", p),
             Inst::Assert(p) => write!(fmt, "assert {}", p),
         }
