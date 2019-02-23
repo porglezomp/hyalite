@@ -78,6 +78,20 @@ fn compile_stmt(cfg: &mut Cfg, entry: Id, s: &Stmt) -> Id {
             };
             tail
         }
+        Stmt::While(cond, body) => {
+            let head = cfg.add_new_block();
+            let body_id = cfg.add_new_block();
+            let loop_end = compile_stmt(cfg, body_id, body);
+            let tail = cfg.add_new_block();
+            cfg.blocks[entry.0].terminator = Terminator::Jump(head);
+            cfg.blocks[loop_end.0].terminator = Terminator::Jump(head);
+            cfg.blocks[head.0].terminator = Terminator::Cond {
+                cond: cond.clone(),
+                t_id: body_id,
+                f_id: tail,
+            };
+            tail
+        }
         Stmt::Seq(stmts) => {
             let mut block = entry;
             for stmt in stmts {

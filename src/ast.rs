@@ -31,6 +31,26 @@ impl BExpr {
         BExpr::Eq(Rc::new(n1.into()), Rc::new(n2.into()))
     }
 
+    pub fn ne(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
+        BExpr::not(BExpr::Eq(Rc::new(n1.into()), Rc::new(n2.into())))
+    }
+
+    pub fn lt(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
+        BExpr::Lt(Rc::new(n1.into()), Rc::new(n2.into()))
+    }
+
+    pub fn gt(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
+        BExpr::Lt(Rc::new(n2.into()), Rc::new(n1.into()))
+    }
+
+    pub fn le(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
+        BExpr::not(BExpr::gt(n1, n2))
+    }
+
+    pub fn ge(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
+        BExpr::not(BExpr::lt(n1, n2))
+    }
+
     pub fn not(b: impl Into<BExpr>) -> BExpr {
         BExpr::Not(Rc::new(b.into()))
     }
@@ -52,6 +72,10 @@ impl NExpr {
     pub fn add(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> NExpr {
         NExpr::Add(Rc::new(n1.into()), Rc::new(n2.into()))
     }
+
+    pub fn sub(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> NExpr {
+        NExpr::Sub(Rc::new(n1.into()), Rc::new(n2.into()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +89,7 @@ pub enum Inst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     If(BExpr, Rc<Stmt>, Option<Rc<Stmt>>),
+    While(BExpr, Rc<Stmt>),
     Seq(Vec<Stmt>),
     Inst(Inst),
 }
@@ -72,6 +97,10 @@ pub enum Stmt {
 impl Stmt {
     pub fn if_(b: impl Into<BExpr>, t: impl Into<Stmt>, f: impl Into<Option<Stmt>>) -> Stmt {
         Stmt::If(b.into(), Rc::new(t.into()), f.into().map(Rc::new))
+    }
+
+    pub fn while_(b: impl Into<BExpr>, s: impl Into<Stmt>) -> Stmt {
+        Stmt::While(b.into(), Rc::new(s.into()))
     }
 
     pub fn declare(v: Var) -> Stmt {
@@ -166,6 +195,10 @@ impl fmt::Display for Stmt {
                     write!(fmt, "\nelse\n{}", f)?;
                 }
                 write!(fmt, "\nend")
+            }
+            Stmt::While(b, s) => {
+                let s = format!("  {}", s).replace("\n", "\n  ");
+                write!(fmt, "while {} do\n{}\nend", b, s)
             }
             Stmt::Seq(s) => match &s[..] {
                 &[] => write!(fmt, "skip"),

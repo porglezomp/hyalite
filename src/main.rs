@@ -24,13 +24,15 @@ fn main() {
             ],
             None,
         ),
+        Stmt::while_(BExpr::lt(0, x), vec![Stmt::assign(x, NExpr::sub(x, 413))]),
+        Stmt::assert(BExpr::le(x, 0)),
     ]);
     println!("{}", prog);
     println!();
     let cfg = compile::compile(&prog);
     println!("{}", cfg);
     let mut queue = make_queue(&cfg);
-    let results = run_queue(&cfg, &mut queue, 10);
+    let results = run_queue(&cfg, &mut queue, 25);
     for (i, trace) in results.iter().enumerate() {
         println!("Trace {}:", i);
         for inst in trace {
