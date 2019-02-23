@@ -1,6 +1,5 @@
 use std::{
     fmt,
-    io::Write,
     rc::Rc,
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -31,6 +30,10 @@ impl BExpr {
     pub fn eq(n1: impl Into<NExpr>, n2: impl Into<NExpr>) -> BExpr {
         BExpr::Eq(Rc::new(n1.into()), Rc::new(n2.into()))
     }
+
+    pub fn not(b: impl Into<BExpr>) -> BExpr {
+        BExpr::Not(Rc::new(b.into()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,13 +55,18 @@ impl NExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    If(BExpr, Rc<Stmt>, Option<Rc<Stmt>>),
-    Seq(Vec<Stmt>),
+pub enum Inst {
     Declare(Var),
     Assign(Var, NExpr),
     Assume(BExpr),
     Assert(BExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stmt {
+    If(BExpr, Rc<Stmt>, Option<Rc<Stmt>>),
+    Seq(Vec<Stmt>),
+    Inst(Inst),
 }
 
 impl Stmt {
@@ -67,19 +75,19 @@ impl Stmt {
     }
 
     pub fn declare(v: Var) -> Stmt {
-        Stmt::Declare(v)
+        Stmt::Inst(Inst::Declare(v))
     }
 
     pub fn assign(v: Var, x: impl Into<NExpr>) -> Stmt {
-        Stmt::Assign(v, x.into())
+        Stmt::Inst(Inst::Assign(v, x.into()))
     }
 
     pub fn assume(p: impl Into<BExpr>) -> Stmt {
-        Stmt::Assume(p.into())
+        Stmt::Inst(Inst::Assume(p.into()))
     }
 
     pub fn assert(p: impl Into<BExpr>) -> Stmt {
-        Stmt::Assert(p.into())
+        Stmt::Inst(Inst::Assert(p.into()))
     }
 }
 
@@ -136,6 +144,17 @@ impl fmt::Display for NExpr {
     }
 }
 
+impl fmt::Display for Inst {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Inst::Declare(v) => write!(fmt, "var {}", v),
+            Inst::Assign(v, n) => write!(fmt, "{} := {}", v, n),
+            Inst::Assume(p) => write!(fmt, "assume {}", p),
+            Inst::Assert(p) => write!(fmt, "assert {}", p),
+        }
+    }
+}
+
 impl fmt::Display for Stmt {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -158,10 +177,7 @@ impl fmt::Display for Stmt {
                     Ok(())
                 }
             },
-            Stmt::Declare(v) => write!(fmt, "var {}", v),
-            Stmt::Assign(v, n) => write!(fmt, "{} := {}", v, n),
-            Stmt::Assume(p) => write!(fmt, "assume {}", p),
-            Stmt::Assert(p) => write!(fmt, "assert {}", p),
+            Stmt::Inst(inst) => write!(fmt, "{}", inst),
         }
     }
 }
